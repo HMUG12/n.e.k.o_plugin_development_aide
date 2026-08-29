@@ -1,0 +1,52 @@
+[plugin]
+id = "development_aide"
+name = "Development-Aide"
+description = "开发辅助型 N.E.K.O 插件：可导入 Skill 技能包，并以只读方式读取已配置项目目录中的源码与配置，帮助猫娘为用户提供代码意见、纠错和开发建议。"
+short_description = "Dev assistant for skill import and read-only project inspection."
+keywords = ["development", "assistant", "skill", "read-only", "code review", "debug", "项目", "开发辅助"]
+version = "0.1.0"
+entry = "plugin.plugins.development_aide:DevelopmentAidePlugin"
+
+[plugin.author]
+name = "HMUG12"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin_runtime]
+enabled = true
+auto_start = true
+
+[plugin.store]
+enabled = true
+
+[plugin.database]
+enabled = true
+
+[plugin.i18n]
+default_locale = "zh-CN"
+locales_dir = "i18n"
+
+[plugin.ui]
+enabled = true
+
+[[plugin.ui.panel]]
+id = "settings"
+title = "Development-Aide"
+entry = "ui/settings.tsx"
+context = "settings"
+permissions = ["state:read", "action:call", "config:read"]
+
+[[plugin.ui.guide]]
+id = "guide"
+title = "使用指南"
+entry = "docs/guide.md"
+permissions = ["state:read"]
+
+[settings]
+skill_path = "/home/codespace/.trae/skills/neko-plugin-dev"
+workspace_root = "/workspaces/n.e.k.o_plugin_Development-Aide"
+read_only = true
+max_chars = 4000
+default_file_extensions = [".py", ".ts", ".tsx", ".md", ".toml", ".json"]
