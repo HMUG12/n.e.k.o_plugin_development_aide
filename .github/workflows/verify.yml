@@ -9,6 +9,23 @@ permissions:
   contents: read
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install N.E.K.O SDK
+        run: npm install -g neko-sdk
+
+      - name: Validate N.E.K.O Plugin
+        run: neko-sdk validate .
+
   test:
     runs-on: ubuntu-latest
     strategy:
