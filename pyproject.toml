@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "development-aide"
+version = "0.0.1"
+description = "Development-Aide: A N.E.K.O plugin for skill import and read-only project inspection"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "HMUG12"}
+]
+keywords = ["development", "assistant", "skill", "read-only", "code review", "debug"]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = "."
+testpaths = ["tests"]
