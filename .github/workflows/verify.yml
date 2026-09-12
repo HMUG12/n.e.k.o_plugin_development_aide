@@ -4,27 +4,18 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      - name: Install N.E.K.O SDK
-        run: npm install -g neko-sdk
-
-      - name: Validate N.E.K.O Plugin
-        run: neko-sdk validate .
+  verify:
+    uses: Project-N-E-K-O/N.E.K.O/.github/workflows/plugin-market-verify.yml@main
+    with:
+      plugin-id: development_aide
+      neko-repository: Project-N-E-K-O/N.E.K.O
+      neko-ref: main
 
   test:
     runs-on: ubuntu-latest

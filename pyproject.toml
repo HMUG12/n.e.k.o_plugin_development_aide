@@ -1,10 +1,6 @@
-[build-system]
-requires = ["setuptools>=45", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "development-aide"
-version = "0.0.1"
+name = "development_aide"
+version = "0.1.0"
 description = "Development-Aide: A N.E.K.O plugin for skill import and read-only project inspection"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,5 +16,4 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = "."
 testpaths = ["tests"]
