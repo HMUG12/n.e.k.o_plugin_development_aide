@@ -63,6 +63,7 @@ except ImportError:  # pragma: no cover - fallback for tests and standalone impo
 
 
 def _normalize_extensions(extensions: Any | None) -> set[str]:
+    """Normalize and validate file extensions."""
     if not extensions:
         return {".py", ".ts", ".tsx", ".md", ".toml", ".json"}
     normalized: set[str] = set()
@@ -75,6 +76,7 @@ def _normalize_extensions(extensions: Any | None) -> set[str]:
 
 
 def collect_project_files(root: str, relative_path: str = "", extensions: Any | None = None) -> list[str]:
+    """Collect project files recursively with extension filtering."""
     base_root = os.path.abspath(root)
     scan_root = os.path.join(base_root, relative_path) if relative_path else base_root
     if not os.path.isdir(scan_root):
@@ -82,17 +84,22 @@ def collect_project_files(root: str, relative_path: str = "", extensions: Any | 
 
     allowed = _normalize_extensions(extensions)
     files: list[str] = []
-    for dirpath, _, filenames in os.walk(scan_root):
-        for filename in sorted(filenames):
-            full_path = os.path.join(dirpath, filename)
-            if allowed and not any(filename.lower().endswith(ext.lower()) for ext in allowed):
-                continue
-            rel_path = os.path.relpath(full_path, base_root).replace(os.sep, "/")
-            files.append(rel_path)
+    try:
+        for dirpath, _, filenames in os.walk(scan_root):
+            for filename in sorted(filenames):
+                full_path = os.path.join(dirpath, filename)
+                if allowed and not any(filename.lower().endswith(ext.lower()) for ext in allowed):
+                    continue
+                rel_path = os.path.relpath(full_path, base_root).replace(os.sep, "/")
+                files.append(rel_path)
+    except (OSError, PermissionError) as e:
+        # Log but continue if directory traversal fails
+        pass
     return sorted(files)
 
 
 def detect_common_issues(content: str, file_name: str) -> list[str]:
+    """Detect common code issues and anti-patterns."""
     issues: list[str] = []
     lowered = content.lower()
 
@@ -112,6 +119,7 @@ def detect_common_issues(content: str, file_name: str) -> list[str]:
 
 
 def build_project_summary(files: list[str], project_root: str) -> dict[str, Any]:
+    """Build a summary of project structure and file distribution."""
     ext_counts: dict[str, int] = {}
     for file_name in files:
         _, ext = os.path.splitext(file_name)
@@ -133,6 +141,7 @@ def build_project_summary(files: list[str], project_root: str) -> dict[str, Any]
 
 
 def build_code_review_report(files_by_path: dict[str, str]) -> dict[str, Any]:
+    """Generate a comprehensive code review report."""
     review_items: list[str] = []
     issue_count = 0
     for file_path, content in files_by_path.items():
@@ -150,6 +159,7 @@ def build_code_review_report(files_by_path: dict[str, str]) -> dict[str, Any]:
 
 
 def build_error_fix_report(files_by_path: dict[str, str]) -> dict[str, Any]:
+    """Generate error detection and fix suggestions."""
     fixes: list[str] = []
     for file_path, content in files_by_path.items():
         lowered = content.lower()
@@ -167,6 +177,7 @@ def build_error_fix_report(files_by_path: dict[str, str]) -> dict[str, Any]:
 
 
 def build_multi_file_summary(files_by_path: dict[str, str]) -> dict[str, Any]:
+    """Build a multi-file cross-cutting summary."""
     ordered_files = list(files_by_path.keys())
     total_chars = sum(len(content) for content in files_by_path.values())
     summary_text = (
@@ -184,6 +195,7 @@ def build_multi_file_summary(files_by_path: dict[str, str]) -> dict[str, Any]:
 
 
 def build_quick_audit(files_by_path: dict[str, str], tone: str = "professional") -> dict[str, Any]:
+    """Build a comprehensive quick audit combining review, fixes, and structure."""
     review = build_code_review_report(files_by_path)
     fixes = build_error_fix_report(files_by_path)
     structure = build_multi_file_summary(files_by_path)
@@ -204,6 +216,7 @@ def build_quick_audit(files_by_path: dict[str, str], tone: str = "professional")
 
 
 def format_response(text: str, tone: str) -> str:
+    """Format response with appropriate tone."""
     if tone == "catgirl":
         return f"喵~ meow~ nya~ {text}"
     return f"Professional review:\n{text}"
@@ -228,19 +241,29 @@ class DevelopmentAidePlugin(NekoPluginBase):
 
     @lifecycle(id="startup")
     async def on_startup(self, **_) -> Ok | Err:
-        await self._reload_settings()
-        return Ok({"status": "ready", "read_only": self.read_only})
+        """Initialize plugin on startup."""
+        try:
+            await self._reload_settings()
+            return Ok({"status": "ready", "read_only": self.read_only})
+        except Exception as e:
+            return Err(SdkError(f"Startup failed: {str(e)}"))
 
     @lifecycle(id="shutdown")
     async def on_shutdown(self, **_) -> Ok | Err:
+        """Clean up on shutdown."""
         return Ok({"status": "stopped"})
 
     @lifecycle(id="config_change")
     async def on_config_change(self, **_) -> Ok | Err:
-        await self._reload_settings()
-        return Ok({"status": "reloaded", "read_only": self.read_only})
+        """Reload settings when configuration changes."""
+        try:
+            await self._reload_settings()
+            return Ok({"status": "reloaded", "read_only": self.read_only})
+        except Exception as e:
+            return Err(SdkError(f"Config reload failed: {str(e)}"))
 
     async def _reload_settings(self) -> None:
+        """Load and apply plugin settings from configuration."""
         cfg = await self.config.dump()
         settings = cfg.get("settings", {})
         self.skill_path = settings.get("skill_path", self.skill_path)
@@ -255,11 +278,13 @@ class DevelopmentAidePlugin(NekoPluginBase):
         self.default_file_extensions = settings.get("default_file_extensions", self.default_file_extensions)
 
     def _normalize_root(self, root: str) -> str:
+        """Normalize workspace root path."""
         if not root:
             return self.workspace_root
         return os.path.abspath(root)
 
     def _safe_file_path(self, relative_path: str, root: str | None = None) -> str | None:
+        """Validate and resolve file path within allowed workspace."""
         base_root = self._normalize_root(root or self.workspace_root)
         abs_path = os.path.abspath(os.path.join(base_root, relative_path))
         root_prefix = os.path.abspath(base_root)
@@ -268,6 +293,7 @@ class DevelopmentAidePlugin(NekoPluginBase):
         return abs_path
 
     def _collect_from_root(self, relative_path: str = "", extensions: list[str] | None = None) -> list[str]:
+        """Collect files from workspace root with optional filtering."""
         base_root = self._normalize_root(self.workspace_root)
         scan_root = os.path.join(base_root, relative_path) if relative_path else base_root
         return collect_project_files(base_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
@@ -287,6 +313,7 @@ class DevelopmentAidePlugin(NekoPluginBase):
         llm_result_fields=["result", "skill_path", "message"],
     )
     async def import_skill(self, skill_path: str = "", skill_name: str = "", **_) -> Ok | Err:
+        """Import a skill directory for enhanced capabilities."""
         if not skill_path:
             return Err(SdkError("必须提供 skill_path。"))
         abs_path = os.path.abspath(skill_path)
@@ -316,12 +343,16 @@ class DevelopmentAidePlugin(NekoPluginBase):
         llm_result_fields=["result", "files"],
     )
     async def list_project_files(self, relative_path: str = "", extensions: list[str] | None = None, **_) -> Ok | Err:
-        base_root = self._normalize_root(self.workspace_root)
-        scan_root = os.path.join(base_root, relative_path) if relative_path else base_root
-        if not os.path.isdir(scan_root):
-            return Err(SdkError(f"目录不存在：{scan_root}"))
-        files = collect_project_files(base_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
-        return Ok({"result": "success", "files": files[:200], "count": len(files[:200]), "root": base_root})
+        """List files in project directory with optional filtering."""
+        try:
+            base_root = self._normalize_root(self.workspace_root)
+            scan_root = os.path.join(base_root, relative_path) if relative_path else base_root
+            if not os.path.isdir(scan_root):
+                return Err(SdkError(f"目录不存在：{scan_root}"))
+            files = collect_project_files(base_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
+            return Ok({"result": "success", "files": files[:200], "count": len(files[:200]), "root": base_root})
+        except Exception as e:
+            return Err(SdkError(f"Failed to list files: {str(e)}"))
 
     @plugin_entry(
         id="read_project_file",
@@ -338,17 +369,21 @@ class DevelopmentAidePlugin(NekoPluginBase):
         llm_result_fields=["result", "path", "content", "truncated"],
     )
     async def read_project_file(self, relative_path: str = "", max_chars: int | None = None, **_) -> Ok | Err:
+        """Read and return file content within size limits."""
         if not relative_path:
             return Err(SdkError("relative_path 不能为空。"))
-        full_path = self._safe_file_path(relative_path)
-        if not full_path or not os.path.isfile(full_path):
-            return Err(SdkError(f"文件不存在或不在允许的工作区范围内：{relative_path}"))
-        with open(full_path, "r", encoding="utf-8", errors="replace") as handle:
-            content = handle.read()
-        limit = int(max_chars or self.max_chars)
-        truncated = len(content) > limit
-        snippet = content[:limit]
-        return Ok({"result": "success", "path": relative_path, "content": snippet, "truncated": truncated, "read_only": self.read_only})
+        try:
+            full_path = self._safe_file_path(relative_path)
+            if not full_path or not os.path.isfile(full_path):
+                return Err(SdkError(f"文件不存在或不在允许的工作区范围内：{relative_path}"))
+            with open(full_path, "r", encoding="utf-8", errors="replace") as handle:
+                content = handle.read()
+            limit = int(max_chars or self.max_chars)
+            truncated = len(content) > limit
+            snippet = content[:limit]
+            return Ok({"result": "success", "path": relative_path, "content": snippet, "truncated": truncated, "read_only": self.read_only})
+        except Exception as e:
+            return Err(SdkError(f"Failed to read file: {str(e)}"))
 
     @plugin_entry(
         id="code_review",
@@ -366,13 +401,23 @@ class DevelopmentAidePlugin(NekoPluginBase):
         llm_result_fields=["result", "report"],
     )
     async def code_review(self, relative_path: str = "", extensions: list[str] | None = None, tone: str = "professional", **_) -> Ok | Err:
-        files = collect_project_files(self.workspace_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
-        if not files:
-            return Err(SdkError("没有找到可审查的代码文件。"))
-        inferred_files = {name: open(os.path.join(self.workspace_root, name), "r", encoding="utf-8", errors="replace").read() for name in files[:25]}
-        report = build_code_review_report(inferred_files)
-        report["formatted"] = format_response("\n".join(report["issues"]), tone or self.analysis_tone)
-        return Ok({"result": "success", "report": report})
+        """Perform comprehensive code review."""
+        try:
+            files = collect_project_files(self.workspace_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
+            if not files:
+                return Err(SdkError("没有找到可审查的代码文件。"))
+            inferred_files = {}
+            for name in files[:25]:
+                try:
+                    with open(os.path.join(self.workspace_root, name), "r", encoding="utf-8", errors="replace") as f:
+                        inferred_files[name] = f.read()
+                except (OSError, IOError):
+                    pass
+            report = build_code_review_report(inferred_files)
+            report["formatted"] = format_response("\n".join(report["issues"]), tone or self.analysis_tone)
+            return Ok({"result": "success", "report": report})
+        except Exception as e:
+            return Err(SdkError(f"Code review failed: {str(e)}"))
 
     @plugin_entry(
         id="error_fix",
@@ -390,13 +435,23 @@ class DevelopmentAidePlugin(NekoPluginBase):
         llm_result_fields=["result", "fixes"],
     )
     async def error_fix(self, relative_path: str = "", extensions: list[str] | None = None, tone: str = "professional", **_) -> Ok | Err:
-        files = collect_project_files(self.workspace_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
-        if not files:
-            return Err(SdkError("没有找到可检查的文件。"))
-        inferred_files = {name: open(os.path.join(self.workspace_root, name), "r", encoding="utf-8", errors="replace").read() for name in files[:25]}
-        fixes = build_error_fix_report(inferred_files)
-        fixes["formatted"] = format_response("\n".join(fixes["fixes"]), tone or self.analysis_tone)
-        return Ok({"result": "success", "fixes": fixes})
+        """Detect and suggest fixes for common errors."""
+        try:
+            files = collect_project_files(self.workspace_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
+            if not files:
+                return Err(SdkError("没有找到可检查的文件。"))
+            inferred_files = {}
+            for name in files[:25]:
+                try:
+                    with open(os.path.join(self.workspace_root, name), "r", encoding="utf-8", errors="replace") as f:
+                        inferred_files[name] = f.read()
+                except (OSError, IOError):
+                    pass
+            fixes = build_error_fix_report(inferred_files)
+            fixes["formatted"] = format_response("\n".join(fixes["fixes"]), tone or self.analysis_tone)
+            return Ok({"result": "success", "fixes": fixes})
+        except Exception as e:
+            return Err(SdkError(f"Error fix analysis failed: {str(e)}"))
 
     @plugin_entry(
         id="project_summary",
@@ -414,12 +469,16 @@ class DevelopmentAidePlugin(NekoPluginBase):
         llm_result_fields=["result", "summary"],
     )
     async def project_summary(self, relative_path: str = "", extensions: list[str] | None = None, tone: str = "professional", **_) -> Ok | Err:
-        files = collect_project_files(self.workspace_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
-        if not files:
-            return Err(SdkError("没有找到可分析的项目文件。"))
-        summary = build_project_summary(files, self.workspace_root)
-        summary["formatted"] = format_response(summary["summary"], tone or self.analysis_tone)
-        return Ok({"result": "success", "summary": summary})
+        """Generate project structure summary."""
+        try:
+            files = collect_project_files(self.workspace_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
+            if not files:
+                return Err(SdkError("没有找到可分析的项目文件。"))
+            summary = build_project_summary(files, self.workspace_root)
+            summary["formatted"] = format_response(summary["summary"], tone or self.analysis_tone)
+            return Ok({"result": "success", "summary": summary})
+        except Exception as e:
+            return Err(SdkError(f"Project summary failed: {str(e)}"))
 
     @plugin_entry(
         id="multi_file_summary",
@@ -437,17 +496,24 @@ class DevelopmentAidePlugin(NekoPluginBase):
         llm_result_fields=["result", "summary"],
     )
     async def multi_file_summary(self, relative_path: str = "", extensions: list[str] | None = None, tone: str = "professional", **_) -> Ok | Err:
-        files = collect_project_files(self.workspace_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
-        if not files:
-            return Err(SdkError("没有找到可汇总的文件。"))
-        selected_files = {}
-        for file_name in files[:12]:
-            full_path = os.path.join(self.workspace_root, file_name)
-            with open(full_path, "r", encoding="utf-8", errors="replace") as handle:
-                selected_files[file_name] = handle.read()
-        summary = build_multi_file_summary(selected_files)
-        summary["formatted"] = format_response(summary["summary"], tone or self.analysis_tone)
-        return Ok({"result": "success", "summary": summary})
+        """Summarize insights across multiple files."""
+        try:
+            files = collect_project_files(self.workspace_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
+            if not files:
+                return Err(SdkError("没有找到可汇总的文件。"))
+            selected_files = {}
+            for file_name in files[:12]:
+                try:
+                    full_path = os.path.join(self.workspace_root, file_name)
+                    with open(full_path, "r", encoding="utf-8", errors="replace") as handle:
+                        selected_files[file_name] = handle.read()
+                except (OSError, IOError):
+                    pass
+            summary = build_multi_file_summary(selected_files)
+            summary["formatted"] = format_response(summary["summary"], tone or self.analysis_tone)
+            return Ok({"result": "success", "summary": summary})
+        except Exception as e:
+            return Err(SdkError(f"Multi-file summary failed: {str(e)}"))
 
     @plugin_entry(
         id="quick_audit",
@@ -465,16 +531,23 @@ class DevelopmentAidePlugin(NekoPluginBase):
         llm_result_fields=["result", "audit"],
     )
     async def quick_audit(self, relative_path: str = "", extensions: list[str] | None = None, tone: str = "professional", **_) -> Ok | Err:
-        files = collect_project_files(self.workspace_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
-        if not files:
-            return Err(SdkError("没有找到可审查的文件。"))
-        selected_files = {}
-        for file_name in files[:12]:
-            full_path = os.path.join(self.workspace_root, file_name)
-            with open(full_path, "r", encoding="utf-8", errors="replace") as handle:
-                selected_files[file_name] = handle.read()
-        audit = build_quick_audit(selected_files, tone=tone or self.analysis_tone)
-        return Ok({"result": "success", "audit": audit})
+        """Execute comprehensive quick audit combining all analyses."""
+        try:
+            files = collect_project_files(self.workspace_root, relative_path=relative_path, extensions=extensions or self.default_file_extensions)
+            if not files:
+                return Err(SdkError("没有找到可审查的文件。"))
+            selected_files = {}
+            for file_name in files[:12]:
+                try:
+                    full_path = os.path.join(self.workspace_root, file_name)
+                    with open(full_path, "r", encoding="utf-8", errors="replace") as handle:
+                        selected_files[file_name] = handle.read()
+                except (OSError, IOError):
+                    pass
+            audit = build_quick_audit(selected_files, tone=tone or self.analysis_tone)
+            return Ok({"result": "success", "audit": audit})
+        except Exception as e:
+            return Err(SdkError(f"Quick audit failed: {str(e)}"))
 
     @ui.action(
         label=tr("actions.save.label", default="保存设置"),
@@ -482,37 +555,46 @@ class DevelopmentAidePlugin(NekoPluginBase):
         refresh_context=True,
     )
     async def save_settings(self, config: dict | None = None, **_) -> Ok | Err:
+        """Save plugin configuration."""
         if not isinstance(config, dict):
             return Err(SdkError("config 必须是对象。"))
-        self.skill_path = str(config.get("skill_path", self.skill_path))
-        self.workspace_root = str(config.get("workspace_root", self.workspace_root))
-        self.read_only = bool(config.get("read_only", self.read_only))
-        self.max_chars = int(config.get("max_chars", self.max_chars))
-        self.analysis_tone = str(config.get("analysis_tone", self.analysis_tone))
-        self.enable_code_review = bool(config.get("enable_code_review", self.enable_code_review))
-        self.enable_error_fix = bool(config.get("enable_error_fix", self.enable_error_fix))
-        self.enable_project_summary = bool(config.get("enable_project_summary", self.enable_project_summary))
-        self.enable_multi_file_summary = bool(config.get("enable_multi_file_summary", self.enable_multi_file_summary))
-        return Ok({"status": "saved", "skill_path": self.skill_path, "workspace_root": self.workspace_root, "read_only": self.read_only, "analysis_tone": self.analysis_tone})
+        try:
+            self.skill_path = str(config.get("skill_path", self.skill_path))
+            self.workspace_root = str(config.get("workspace_root", self.workspace_root))
+            self.read_only = bool(config.get("read_only", self.read_only))
+            self.max_chars = int(config.get("max_chars", self.max_chars))
+            self.analysis_tone = str(config.get("analysis_tone", self.analysis_tone))
+            self.enable_code_review = bool(config.get("enable_code_review", self.enable_code_review))
+            self.enable_error_fix = bool(config.get("enable_error_fix", self.enable_error_fix))
+            self.enable_project_summary = bool(config.get("enable_project_summary", self.enable_project_summary))
+            self.enable_multi_file_summary = bool(config.get("enable_multi_file_summary", self.enable_multi_file_summary))
+            return Ok({"status": "saved", "skill_path": self.skill_path, "workspace_root": self.workspace_root, "read_only": self.read_only, "analysis_tone": self.analysis_tone})
+        except Exception as e:
+            return Err(SdkError(f"Failed to save settings: {str(e)}"))
 
     @ui.action(id="generate_code_review", label="代码审查", tone="info")
     async def generate_code_review_action(self, **_) -> Ok | Err:
+        """UI action for code review."""
         return await self.code_review(tone=self.analysis_tone)
 
     @ui.action(id="generate_error_fix", label="修复建议", tone="warning")
     async def generate_error_fix_action(self, **_) -> Ok | Err:
+        """UI action for error fix suggestions."""
         return await self.error_fix(tone=self.analysis_tone)
 
     @ui.action(id="generate_project_summary", label="结构摘要", tone="primary")
     async def generate_project_summary_action(self, **_) -> Ok | Err:
+        """UI action for project summary."""
         return await self.project_summary(tone=self.analysis_tone)
 
     @ui.action(id="generate_multi_file_summary", label="多文件汇总", tone="success")
     async def generate_multi_file_summary_action(self, **_) -> Ok | Err:
+        """UI action for multi-file summary."""
         return await self.multi_file_summary(tone=self.analysis_tone)
 
     @ui.context(id="settings")
     async def settings_context(self):
+        """Provide settings context for UI."""
         return {
             "config": {
                 "skill_path": self.skill_path,
