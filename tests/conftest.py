@@ -16,9 +16,12 @@ import sys
 import types
 from pathlib import Path
 
-# Without ``__path__`` the import system raises ModuleNotFoundError, which the
-# package catches to select its standalone fallback.
-sys.modules.setdefault("plugin", types.ModuleType("plugin"))
+# Replacing the SDK module makes ``from plugin.sdk.plugin import ...`` raise
+# ImportError, which the package catches to select its standalone fallback.
+# Only this leaf module is replaced: pytest imports the plugin itself as the
+# package ``plugin.plugins.development_aide`` inside the N.E.K.O tree, so the
+# real ``plugin`` and ``plugin.plugins`` packages must stay intact.
+sys.modules.setdefault("plugin.sdk.plugin", types.ModuleType("plugin.sdk.plugin"))
 
 ROOT = Path(__file__).resolve().parents[1]
 
