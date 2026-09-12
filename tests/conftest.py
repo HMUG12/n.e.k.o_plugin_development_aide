@@ -1,12 +1,24 @@
-"""Load the plugin package for standalone test runs.
+"""Test bootstrap: load the plugin package in standalone mode.
 
 The repository root *is* the plugin package (``plugin.plugins.development_aide``
 once mounted into N.E.K.O), but its directory name here is not a valid Python
-identifier, so tests import it by file location instead.
+identifier, so the module is loaded by file location.
+
+The suite must also pass inside the N.E.K.O tree, where the market release
+check runs pytest against the real SDK: ``NekoPluginBase`` there resolves the
+plugin directory and metadata from a live ``PluginContext`` that unit tests do
+not have. Blocking ``plugin`` keeps these tests on the package's in-memory
+standalone fallback so they behave identically in both environments; SDK
+integration itself is covered by the host's validator.
 """
 import importlib.util
 import sys
+import types
 from pathlib import Path
+
+# Without ``__path__`` the import system raises ModuleNotFoundError, which the
+# package catches to select its standalone fallback.
+sys.modules.setdefault("plugin", types.ModuleType("plugin"))
 
 ROOT = Path(__file__).resolve().parents[1]
 
