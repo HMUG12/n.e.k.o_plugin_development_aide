@@ -8,6 +8,7 @@ from development_aide import (
     DevelopmentAidePlugin,
     Err,
     Ok,
+    _is_probably_binary,
     build_code_review_report,
     build_error_fix_report,
     build_multi_file_summary,
@@ -16,12 +17,17 @@ from development_aide import (
     coerce_read_limit,
     collect_project_files,
     collect_project_files_budgeted,
+    describe_coverage,
     detect_common_issues,
+    detect_skill_marker,
+    find_files_by_name,
     format_response,
     read_project_members,
     read_text_limited,
     resolve_member_path,
+    resolve_reference,
     resolve_scan_root,
+    scan_skill_directories,
 )
 
 # ---------------------------------------------------------------------------
@@ -365,3 +371,229 @@ def test_code_review_runs_when_enabled(tmp_path):
     assert isinstance(result, Ok)
     assert result["report"]["issue_count"] >= 1
     assert "budget" in result["report"]
+
+
+# ---------------------------------------------------------------------------
+# File reference resolution and diagnostics
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_reference_accepts_relative_absolute_and_bare_name(tmp_path):
+    workspace = tmp_path / "ws"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    (tmp_path / "outside.py").write_text("nope\n", encoding="utf-8")
+
+    relative, _, reason = resolve_reference(str(workspace), "src/main.py")
+    assert (relative, reason) == ("src/main.py", "ok")
+    absolute, _, reason_abs = resolve_reference(str(workspace), str(workspace / "src" / "main.py"))
+    assert (absolute, reason_abs) == ("src/main.py", "ok")
+    bare, _, reason_bare = resolve_reference(str(workspace), "main.py")
+    assert (bare, reason_bare) == ("src/main.py", "ok")
+
+    assert resolve_reference(str(workspace), str(tmp_path / "outside.py"))[2] == "outside"
+    assert resolve_reference(str(workspace), "../outside.py")[2] == "outside"
+    assert resolve_reference(str(workspace), "src")[2] == "directory"
+    assert resolve_reference(str(workspace), "missing.py")[2] == "missing"
+    assert resolve_reference(str(workspace), "")[2] == "empty"
+
+
+def test_resolve_reference_reports_ambiguous_names(tmp_path):
+    workspace = tmp_path / "ws"
+    (workspace / "a").mkdir(parents=True)
+    (workspace / "b").mkdir()
+    (workspace / "a" / "same.py").write_text("a\n", encoding="utf-8")
+    (workspace / "b" / "same.py").write_text("b\n", encoding="utf-8")
+
+    relative, candidates, reason = resolve_reference(str(workspace), "same.py")
+
+    assert relative is None
+    assert reason == "ambiguous"
+    assert sorted(candidates) == ["a/same.py", "b/same.py"]
+
+
+def test_find_files_by_name_matches_non_default_extensions(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("hi\n", encoding="utf-8")
+
+    assert find_files_by_name(str(workspace), "notes.txt") == ["notes.txt"]
+
+
+def test_is_probably_binary_detects_binary_payloads():
+    assert _is_probably_binary("abc\x00def") is True
+    assert _is_probably_binary("\ufffd" * 10 + "abc") is True
+    assert _is_probably_binary("print('hello')\n") is False
+    assert _is_probably_binary("") is False
+
+
+def test_describe_coverage_flags_partial_reads():
+    scan_meta = {"file_count": 10, "scan_truncated": False}
+    read_meta = {
+        "files_read": 2,
+        "chars_read": 120,
+        "truncated_files": ["a.py"],
+        "files_skipped": ["b.py"],
+        "file_count_truncated": True,
+        "total_budget_truncated": False,
+    }
+
+    note, partial = describe_coverage(scan_meta, read_meta)
+
+    assert partial is True
+    assert "实际读取 2 个" in note
+    assert "被截断" in note
+
+    full_note, full_partial = describe_coverage({"file_count": 3}, {"files_read": 3, "chars_read": 10})
+    assert full_partial is False
+    assert "实际读取 3 个" in full_note
+
+    scan_note, scan_partial = describe_coverage({"file_count": 5}, None)
+    assert scan_partial is False
+    assert "未读取内容" in scan_note
+
+
+def test_detect_and_scan_skill_directories(tmp_path):
+    skills = tmp_path / "skills"
+    (skills / "alpha").mkdir(parents=True)
+    (skills / "alpha" / "SKILL.md").write_text("# alpha\n", encoding="utf-8")
+    (skills / "beta").mkdir()
+    (skills / "beta" / "README.md").write_text("not a skill\n", encoding="utf-8")
+
+    assert detect_skill_marker(str(skills / "alpha")) == "SKILL.md"
+    assert detect_skill_marker(str(skills / "beta")) is None
+
+    candidates, scanned_roots, truncated = scan_skill_directories([str(skills)])
+
+    assert scanned_roots == [os.path.realpath(str(skills))]
+    assert [item["name"] for item in candidates] == ["alpha"]
+    assert truncated is False
+
+
+# ---------------------------------------------------------------------------
+# Entry behaviour for the reported runtime issues
+# ---------------------------------------------------------------------------
+
+
+def _workspace_with_file(tmp_path):
+    workspace = tmp_path / "ws"
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / "main.py").write_text("# TODO: fix me\nprint('/tmp/x')\n", encoding="utf-8")
+    return workspace
+
+
+def test_read_project_file_accepts_absolute_and_bare_paths(tmp_path):
+    workspace = _workspace_with_file(tmp_path)
+    plugin = _make_plugin()
+    assert isinstance(_save_config(plugin, workspace_root=str(workspace)), Ok)
+
+    by_absolute = asyncio.run(plugin.read_project_file(relative_path=str(workspace / "src" / "main.py")))
+    assert isinstance(by_absolute, Ok)
+    assert by_absolute["path"] == "src/main.py"
+
+    by_name = asyncio.run(plugin.read_project_file(relative_path="main.py"))
+    assert isinstance(by_name, Ok)
+    assert by_name["path"] == "src/main.py"
+    assert by_name["workspace_root"] == os.path.realpath(str(workspace))
+    assert "TODO" in by_name["content"]
+
+
+def test_read_project_file_explains_why_it_refused(tmp_path):
+    workspace = _workspace_with_file(tmp_path)
+    outside = tmp_path / "outside.py"
+    outside.write_text("nope\n", encoding="utf-8")
+    plugin = _make_plugin()
+    assert isinstance(_save_config(plugin, workspace_root=str(workspace)), Ok)
+
+    outside_error = asyncio.run(plugin.read_project_file(relative_path=str(outside)))
+    assert isinstance(outside_error, Err)
+    assert "不在当前工作区内" in str(outside_error.error)
+
+    missing_error = asyncio.run(plugin.read_project_file(relative_path="nope.py"))
+    assert isinstance(missing_error, Err)
+    assert "找不到该文件" in str(missing_error.error)
+
+    directory_error = asyncio.run(plugin.read_project_file(relative_path="src"))
+    assert isinstance(directory_error, Err)
+    assert "目录" in str(directory_error.error)
+
+    unset_plugin = _make_plugin()
+    unset_error = asyncio.run(unset_plugin.read_project_file(relative_path="main.py"))
+    assert isinstance(unset_error, Err)
+    assert "尚未配置工作区目录" in str(unset_error.error)
+
+
+def test_read_project_file_rejects_binary_content(tmp_path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "blob.bin").write_bytes(b"\x00\x01\x02binary")
+    plugin = _make_plugin()
+    assert isinstance(_save_config(plugin, workspace_root=str(workspace)), Ok)
+
+    result = asyncio.run(plugin.read_project_file(relative_path="blob.bin"))
+
+    assert isinstance(result, Err)
+    assert "不是文本文件" in str(result.error)
+
+
+def test_save_settings_reports_missing_workspace(tmp_path):
+    plugin = _make_plugin()
+
+    result = _save_config(plugin, workspace_root=str(tmp_path / "not-created"))
+
+    assert isinstance(result, Ok)
+    assert result["workspace_exists"] is False
+    assert result["workspace_configured"] is True
+    assert "不存在" in result["message"]
+
+
+def test_analysis_reports_include_coverage(tmp_path):
+    workspace = _workspace_with_file(tmp_path)
+    plugin = _make_plugin()
+    assert isinstance(_save_config(plugin, workspace_root=str(workspace)), Ok)
+
+    result = asyncio.run(plugin.code_review())
+
+    assert isinstance(result, Ok)
+    assert result["report"]["coverage"]
+    assert isinstance(result["report"]["partial"], bool)
+    assert result["report"]["budget"]["read"]["files_read"] >= 1
+    assert "覆盖度" in result["report"]["formatted"]
+
+
+def test_import_skill_accepts_marker_file_and_rejects_non_skills(tmp_path):
+    skill_dir = tmp_path / "my-skill"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    plugin = _make_plugin()
+
+    ok = asyncio.run(plugin.import_skill(skill_path=str(skill_dir / "SKILL.md")))
+    assert isinstance(ok, Ok)
+    assert ok["skill_path"] == os.path.abspath(str(skill_dir))
+    assert ok["skill_marker"] == "SKILL.md"
+
+    invalid_dir = tmp_path / "not-a-skill"
+    invalid_dir.mkdir()
+    rejected = asyncio.run(plugin.import_skill(skill_path=str(invalid_dir)))
+    assert isinstance(rejected, Err)
+    assert "技能标记文件" in str(rejected.error)
+
+    relative = asyncio.run(plugin.import_skill(skill_path="my-skill"))
+    assert isinstance(relative, Err)
+    assert "绝对路径" in str(relative.error)
+
+
+def test_scan_skill_dirs_finds_workspace_skill(tmp_path):
+    workspace = tmp_path / "ws"
+    skill_dir = workspace / "skills" / "demo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# demo\n", encoding="utf-8")
+    plugin = _make_plugin()
+    assert isinstance(_save_config(plugin, workspace_root=str(workspace)), Ok)
+
+    result = asyncio.run(plugin.scan_skill_dirs())
+
+    assert isinstance(result, Ok)
+    paths = [str(item["path"]).replace("\\", "/") for item in result["candidates"]]
+    assert any(path.endswith("skills/demo") for path in paths)
+    assert result["count"] == len(result["candidates"])
