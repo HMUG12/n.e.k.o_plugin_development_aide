@@ -1,27 +1,25 @@
-"""Test bootstrap: load the plugin package in standalone mode.
+"""Test bootstrap: load the plugin package for standalone test runs.
 
 The repository root *is* the plugin package (``plugin.plugins.development_aide``
 once mounted into N.E.K.O), but its directory name here is not a valid Python
 identifier, so the module is loaded by file location.
 
-The suite must also pass inside the N.E.K.O tree, where the market release
-check runs pytest against the real SDK: ``NekoPluginBase`` there resolves the
-plugin directory and metadata from a live ``PluginContext`` that unit tests do
-not have. Blocking ``plugin`` keeps these tests on the package's in-memory
-standalone fallback so they behave identically in both environments; SDK
-integration itself is covered by the host's validator.
+Inside the N.E.K.O tree the host SDK is importable, and pytest imports this
+same ``__init__.py`` a second time as the package
+``plugin.plugins.development_aide``. Its ``NekoPluginBase`` resolves the plugin
+directory and metadata from a live ``PluginContext`` that unit tests do not
+have, so the copy the tests use is loaded while ``plugin.sdk.plugin`` is
+temporarily shadowed: the package then selects its in-memory fallback and
+behaves identically standalone and inside the host.
+
+The shadow is restored immediately. It must not outlive this import, because
+the host itself imports submodules of ``plugin.sdk.plugin`` and a leftover bare
+module there breaks its own import chain.
 """
 import importlib.util
 import sys
 import types
 from pathlib import Path
-
-# Replacing the SDK module makes ``from plugin.sdk.plugin import ...`` raise
-# ImportError, which the package catches to select its standalone fallback.
-# Only this leaf module is replaced: pytest imports the plugin itself as the
-# package ``plugin.plugins.development_aide`` inside the N.E.K.O tree, so the
-# real ``plugin`` and ``plugin.plugins`` packages must stay intact.
-sys.modules.setdefault("plugin.sdk.plugin", types.ModuleType("plugin.sdk.plugin"))
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,4 +31,14 @@ if "development_aide" not in sys.modules:
     )
     module = importlib.util.module_from_spec(spec)
     sys.modules["development_aide"] = module
-    spec.loader.exec_module(module)
+
+    sentinel = object()
+    previous = sys.modules.get("plugin.sdk.plugin", sentinel)
+    sys.modules["plugin.sdk.plugin"] = types.ModuleType("plugin.sdk.plugin")
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if previous is sentinel:
+            sys.modules.pop("plugin.sdk.plugin", None)
+        else:
+            sys.modules["plugin.sdk.plugin"] = previous
